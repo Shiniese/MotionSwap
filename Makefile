@@ -26,13 +26,13 @@ all: windows linux android
 # Windows amd64 (x86_64 主流64位系统)
 windows-amd64:
 	@mkdir -p $(OUTPUT_DIR)
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=$(CGO_ENABLED) CC=x86_64-w64-mingw32-gcc \
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=$(CGO_ENABLED) CC="zig cc -target x86_64-windows-gnu" \
 	$(GO_BUILD) -o $(OUTPUT_DIR)/$(APP_NAME)_windows_amd64.exe $(MAIN_PATH)
 
 # Windows 386 (x86 32位兼容)
 windows-386:
 	@mkdir -p $(OUTPUT_DIR)
-	GOOS=windows GOARCH=386 CGO_ENABLED=$(CGO_ENABLED) CC=i686-w64-mingw32-gcc \
+	GOOS=windows GOARCH=386 CGO_ENABLED=$(CGO_ENABLED) CC="zig cc -target x86-windows-gnu" \
 	$(GO_BUILD) -o $(OUTPUT_DIR)/$(APP_NAME)_windows_386.exe $(MAIN_PATH)
 
 # Windows 全架构编译
