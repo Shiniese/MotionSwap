@@ -1,3 +1,5 @@
+dist/
+
 # helper files
 .codegraph/
 docs/
