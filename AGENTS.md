@@ -32,7 +32,8 @@ MotionSwap/
 ├── ui/                      # UI 层（Fyne）
 │   ├── app.go               # 主窗口 + AppTabs 标签页
 │   ├── extract_tab.go       # 提取标签页
-│   └── merge_tab.go         # 合并标签页
+│   ├── merge_tab.go         # 合并标签页
+│   └── storage.go           # Fyne storage API 辅助函数（readURI/writeURI）
 ├── core/
 │   ├── extractor/           # 提取模块
 │   │   ├── extractor.go             # 类型定义 + 接口

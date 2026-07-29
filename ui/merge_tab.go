@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -11,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -18,8 +18,8 @@ import (
 )
 
 type mergePair struct {
-	imgPath string
-	vidPath string
+	imgURI  fyne.URI
+	vidURI  fyne.URI
 	imgName string
 	vidName string
 	brand   string
@@ -29,7 +29,9 @@ type mergePair struct {
 type MergeTab struct {
 	window    fyne.Window
 	srcEntry  *widget.Entry
+	srcURI    fyne.ListableURI
 	dstEntry  *widget.Entry
+	dstURI    fyne.ListableURI
 	brandSel  *widget.Select
 	scanBtn   *widget.Button
 	startBtn  *widget.Button
@@ -60,6 +62,7 @@ func (t *MergeTab) Build() fyne.CanvasObject {
 	srcBrowse := widget.NewButtonWithIcon("浏览", theme.FolderOpenIcon(), func() {
 		dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
 			if err == nil && uri != nil {
+				t.srcURI = uri
 				t.srcEntry.SetText(uri.Path())
 			}
 		}, t.window).Show()
@@ -67,6 +70,7 @@ func (t *MergeTab) Build() fyne.CanvasObject {
 	dstBrowse := widget.NewButtonWithIcon("浏览", theme.FolderOpenIcon(), func() {
 		dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
 			if err == nil && uri != nil {
+				t.dstURI = uri
 				t.dstEntry.SetText(uri.Path())
 			}
 		}, t.window).Show()
@@ -149,6 +153,36 @@ func (t *MergeTab) log(msg string) {
 	t.logEntry.CursorRow = len(strings.Split(t.logEntry.Text, "\n")) - 1
 }
 
+func (t *MergeTab) getSrcListableURI() fyne.ListableURI {
+	if t.srcURI != nil {
+		return t.srcURI
+	}
+	path := t.srcEntry.Text
+	if path == "" {
+		return nil
+	}
+	uri := storage.NewFileURI(path)
+	if l, ok := uri.(fyne.ListableURI); ok {
+		return l
+	}
+	l, err := storage.ListerForURI(uri)
+	if err != nil {
+		return nil
+	}
+	return l
+}
+
+func (t *MergeTab) getDstURI() fyne.URI {
+	if t.dstURI != nil {
+		return t.dstURI
+	}
+	path := t.dstEntry.Text
+	if path == "" {
+		return nil
+	}
+	return storage.NewFileURI(path)
+}
+
 func (t *MergeTab) scanDir() {
 	if t.scanning.Load() {
 		return
@@ -160,49 +194,43 @@ func (t *MergeTab) scanDir() {
 		t.scanBtn.Enable()
 	}()
 
-	srcDir := t.srcEntry.Text
-	if srcDir == "" {
+	srcURI := t.getSrcListableURI()
+	if srcURI == nil {
 		dialog.ShowError(fmt.Errorf("请选择源目录"), t.window)
 		return
 	}
 
 	t.pairs = nil
 	t.fileList.Refresh()
-	t.log("扫描目录: " + srcDir)
+	t.log("扫描目录: " + srcURI.Path())
 
-	entries, err := os.ReadDir(srcDir)
+	entries, err := storage.List(srcURI)
 	if err != nil {
 		dialog.ShowError(fmt.Errorf("读取目录失败: %w", err), t.window)
 		return
 	}
 
-	jpgMap := make(map[string]string)
+	jpgMap := make(map[string]fyne.URI)
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
 		name := strings.ToLower(entry.Name())
 		if strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") {
 			base := strings.TrimSuffix(name, filepath.Ext(name))
-			jpgMap[base] = filepath.Join(srcDir, entry.Name())
+			jpgMap[base] = entry
 		}
 	}
 
 	count := 0
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
 		name := strings.ToLower(entry.Name())
 		if !strings.HasSuffix(name, ".mp4") && !strings.HasSuffix(name, ".mov") {
 			continue
 		}
 		base := strings.TrimSuffix(name, filepath.Ext(name))
-		if imgPath, ok := jpgMap[base]; ok {
+		if imgURI, ok := jpgMap[base]; ok {
 			t.pairs = append(t.pairs, mergePair{
-				imgPath: imgPath,
-				vidPath: filepath.Join(srcDir, entry.Name()),
-				imgName: filepath.Base(imgPath),
+				imgURI:  imgURI,
+				vidURI:  entry,
+				imgName: imgURI.Name(),
 				vidName: entry.Name(),
 				brand:   t.brandSel.Selected,
 				status:  "待处理",
@@ -224,8 +252,8 @@ func (t *MergeTab) startMerge() {
 		dialog.ShowInformation("提示", "请先扫描目录", t.window)
 		return
 	}
-	dstDir := t.dstEntry.Text
-	if dstDir == "" {
+	dstURI := t.getDstURI()
+	if dstURI == nil {
 		dialog.ShowError(fmt.Errorf("请选择输出目录"), t.window)
 		return
 	}
@@ -259,7 +287,15 @@ func (t *MergeTab) startMerge() {
 			p.status = "处理中..."
 			t.fileList.Refresh()
 
-			result, err := m.MergeFiles(p.imgPath, p.vidPath, brand)
+			jpegData, err := readURI(p.imgURI)
+			if err != nil {
+				p.status = "失败: " + err.Error()
+				fail++
+				t.log(fmt.Sprintf("  ✗ %s + %s: %v", p.imgName, p.vidName, err))
+				t.progress.SetValue(float64(i+1) / float64(total))
+				continue
+			}
+			mp4Data, err := readURI(p.vidURI)
 			if err != nil {
 				p.status = "失败: " + err.Error()
 				fail++
@@ -268,8 +304,16 @@ func (t *MergeTab) startMerge() {
 				continue
 			}
 
-			outPath := filepath.Join(dstDir, p.imgName)
-			outPath, skip := t.checkConflict(outPath, &conflictAction)
+			result, err := m.Merge(jpegData, mp4Data, brand)
+			if err != nil {
+				p.status = "失败: " + err.Error()
+				fail++
+				t.log(fmt.Sprintf("  ✗ %s + %s: %v", p.imgName, p.vidName, err))
+				t.progress.SetValue(float64(i+1) / float64(total))
+				continue
+			}
+
+			outURI, skip := t.checkConflict(dstURI, p.imgName, &conflictAction)
 			if skip {
 				p.status = "跳过"
 				fail++
@@ -277,7 +321,7 @@ func (t *MergeTab) startMerge() {
 				continue
 			}
 
-			if err := os.WriteFile(outPath, result, 0644); err != nil {
+			if err := writeURI(outURI, result); err != nil {
 				p.status = "失败: 写入错误"
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s: %v", p.imgName, err))
@@ -296,24 +340,35 @@ func (t *MergeTab) startMerge() {
 	}()
 }
 
-func (t *MergeTab) checkConflict(path string, action *string) (string, bool) {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return path, false
+func (t *MergeTab) checkConflict(parent fyne.URI, name string, action *string) (fyne.URI, bool) {
+	uri, err := storage.Child(parent, name)
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("构造输出路径失败: %w", err), t.window)
+		return nil, true
+	}
+	exists, _ := storage.Exists(uri)
+	if !exists {
+		return uri, false
 	}
 	if *action == "" {
 		*action = "rename"
 		dialog.ShowInformation("文件冲突",
-			fmt.Sprintf("文件已存在，将自动重命名:\n%s", path), t.window)
+			fmt.Sprintf("文件已存在，将自动重命名:\n%s", name), t.window)
 	}
 	switch *action {
 	case "overwrite":
-		return path, false
+		return uri, false
 	case "skip":
-		return "", true
+		return nil, true
 	default:
-		ext := filepath.Ext(path)
-		base := strings.TrimSuffix(path, ext)
-		return base + "_1" + ext, false
+		ext := filepath.Ext(name)
+		base := strings.TrimSuffix(name, ext)
+		uri, err = storage.Child(parent, base+"_1"+ext)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("构造输出路径失败: %w", err), t.window)
+			return nil, true
+		}
+		return uri, false
 	}
 }
 

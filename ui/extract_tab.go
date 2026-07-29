@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -11,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -19,7 +19,7 @@ import (
 )
 
 type fileStatus struct {
-	path   string
+	uri    fyne.URI
 	name   string
 	brand  string
 	status string
@@ -28,7 +28,9 @@ type fileStatus struct {
 type ExtractTab struct {
 	window      fyne.Window
 	srcEntry    *widget.Entry
+	srcURI      fyne.ListableURI
 	dstEntry    *widget.Entry
+	dstURI      fyne.ListableURI
 	scanBtn     *widget.Button
 	startBtn    *widget.Button
 	stopBtn     *widget.Button
@@ -58,6 +60,7 @@ func (t *ExtractTab) Build() fyne.CanvasObject {
 	srcBrowse := widget.NewButtonWithIcon("浏览", theme.FolderOpenIcon(), func() {
 		dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
 			if err == nil && uri != nil {
+				t.srcURI = uri
 				t.srcEntry.SetText(uri.Path())
 			}
 		}, t.window).Show()
@@ -65,6 +68,7 @@ func (t *ExtractTab) Build() fyne.CanvasObject {
 	dstBrowse := widget.NewButtonWithIcon("浏览", theme.FolderOpenIcon(), func() {
 		dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
 			if err == nil && uri != nil {
+				t.dstURI = uri
 				t.dstEntry.SetText(uri.Path())
 			}
 		}, t.window).Show()
@@ -139,6 +143,37 @@ func (t *ExtractTab) log(msg string) {
 	t.logEntry.CursorRow = len(strings.Split(t.logEntry.Text, "\n")) - 1
 }
 
+func (t *ExtractTab) getSrcListableURI() fyne.ListableURI {
+	if t.srcURI != nil {
+		return t.srcURI
+	}
+	path := t.srcEntry.Text
+	if path == "" {
+		return nil
+	}
+	uri := storage.NewFileURI(path)
+	if l, ok := uri.(fyne.ListableURI); ok {
+		return l
+	}
+	// wrap non-listable URI into listable
+	l, err := storage.ListerForURI(uri)
+	if err != nil {
+		return nil
+	}
+	return l
+}
+
+func (t *ExtractTab) getDstURI() fyne.URI {
+	if t.dstURI != nil {
+		return t.dstURI
+	}
+	path := t.dstEntry.Text
+	if path == "" {
+		return nil
+	}
+	return storage.NewFileURI(path)
+}
+
 func (t *ExtractTab) scanDir() {
 	if t.scanning.Load() {
 		return
@@ -150,17 +185,17 @@ func (t *ExtractTab) scanDir() {
 		t.scanBtn.Enable()
 	}()
 
-	srcDir := t.srcEntry.Text
-	if srcDir == "" {
+	srcURI := t.getSrcListableURI()
+	if srcURI == nil {
 		dialog.ShowError(fmt.Errorf("请选择源目录"), t.window)
 		return
 	}
 
 	t.files = nil
 	t.fileList.Refresh()
-	t.log("扫描目录: " + srcDir)
+	t.log("扫描目录: " + srcURI.Path())
 
-	entries, err := os.ReadDir(srcDir)
+	entries, err := storage.List(srcURI)
 	if err != nil {
 		dialog.ShowError(fmt.Errorf("读取目录失败: %w", err), t.window)
 		return
@@ -170,16 +205,12 @@ func (t *ExtractTab) scanDir() {
 	count := 0
 
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
 		name := strings.ToLower(entry.Name())
 		if !strings.HasSuffix(name, ".jpg") && !strings.HasSuffix(name, ".jpeg") {
 			continue
 		}
 
-		path := filepath.Join(srcDir, entry.Name())
-		data, err := os.ReadFile(path)
+		data, err := readURI(entry)
 		if err != nil {
 			t.log(fmt.Sprintf("  跳过 %s: %v", entry.Name(), err))
 			continue
@@ -192,7 +223,7 @@ func (t *ExtractTab) scanDir() {
 		}
 
 		t.files = append(t.files, fileStatus{
-			path:   path,
+			uri:    entry,
 			name:   entry.Name(),
 			brand:  p.Brand().String(),
 			status: "待处理",
@@ -213,8 +244,8 @@ func (t *ExtractTab) startExtract() {
 		dialog.ShowInformation("提示", "请先扫描目录", t.window)
 		return
 	}
-	dstDir := t.dstEntry.Text
-	if dstDir == "" {
+	dstURI := t.getDstURI()
+	if dstURI == nil {
 		dialog.ShowError(fmt.Errorf("请选择输出目录"), t.window)
 		return
 	}
@@ -246,7 +277,7 @@ func (t *ExtractTab) startExtract() {
 			f.status = "处理中..."
 			t.fileList.Refresh()
 
-			data, err := os.ReadFile(f.path)
+			data, err := readURI(f.uri)
 			if err != nil {
 				f.status = "失败: 读取错误"
 				fail++
@@ -274,18 +305,17 @@ func (t *ExtractTab) startExtract() {
 			}
 
 			baseName := strings.TrimSuffix(f.name, filepath.Ext(f.name))
-			imgOut := filepath.Join(dstDir, baseName+".jpg")
-			vidOut := filepath.Join(dstDir, baseName+".mp4")
+			imgName := baseName + ".jpg"
+			vidName := baseName + ".mp4"
 
-			var skip bool
-			imgOut, skip = t.checkConflict(imgOut, &conflictAction)
+			imgURI, skip := t.checkConflict(dstURI, imgName, &conflictAction)
 			if skip {
 				f.status = "跳过"
 				fail++
 				t.progress.SetValue(float64(i+1) / float64(total))
 				continue
 			}
-			vidOut, skip = t.checkConflict(vidOut, &conflictAction)
+			vidURI, skip := t.checkConflict(dstURI, vidName, &conflictAction)
 			if skip {
 				f.status = "跳过"
 				fail++
@@ -293,14 +323,14 @@ func (t *ExtractTab) startExtract() {
 				continue
 			}
 
-			if err := os.WriteFile(imgOut, result.ImageData, 0644); err != nil {
+			if err := writeURI(imgURI, result.ImageData); err != nil {
 				f.status = "失败: 写入错误"
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s: %v", f.name, err))
 				t.progress.SetValue(float64(i+1) / float64(total))
 				continue
 			}
-			if err := os.WriteFile(vidOut, result.VideoData, 0644); err != nil {
+			if err := writeURI(vidURI, result.VideoData); err != nil {
 				f.status = "失败: 写入错误"
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s: %v", f.name, err))
@@ -310,7 +340,7 @@ func (t *ExtractTab) startExtract() {
 
 			f.status = "完成"
 			success++
-			t.log(fmt.Sprintf("  ✓ %s → %s, %s", f.name, baseName+".jpg", baseName+".mp4"))
+			t.log(fmt.Sprintf("  ✓ %s → %s, %s", f.name, imgName, vidName))
 			t.progress.SetValue(float64(i+1) / float64(total))
 		}
 
@@ -319,24 +349,35 @@ func (t *ExtractTab) startExtract() {
 	}()
 }
 
-func (t *ExtractTab) checkConflict(path string, action *string) (string, bool) {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return path, false
+func (t *ExtractTab) checkConflict(parent fyne.URI, name string, action *string) (fyne.URI, bool) {
+	uri, err := storage.Child(parent, name)
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("构造输出路径失败: %w", err), t.window)
+		return nil, true
+	}
+	exists, _ := storage.Exists(uri)
+	if !exists {
+		return uri, false
 	}
 	if *action == "" {
 		*action = "rename"
 		dialog.ShowInformation("文件冲突",
-			fmt.Sprintf("文件已存在，将自动重命名:\n%s", path), t.window)
+			fmt.Sprintf("文件已存在，将自动重命名:\n%s", name), t.window)
 	}
 	switch *action {
 	case "overwrite":
-		return path, false
+		return uri, false
 	case "skip":
-		return "", true
+		return nil, true
 	default:
-		ext := filepath.Ext(path)
-		base := strings.TrimSuffix(path, ext)
-		return base + "_1" + ext, false
+		ext := filepath.Ext(name)
+		base := strings.TrimSuffix(name, ext)
+		uri, err = storage.Child(parent, base+"_1"+ext)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("构造输出路径失败: %w", err), t.window)
+			return nil, true
+		}
+		return uri, false
 	}
 }
 
