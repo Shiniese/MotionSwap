@@ -11,9 +11,13 @@ CGO_ENABLED  := 1
 LDFLAGS      := -s -w -X main.version=$(APP_VERSION)
 GO_BUILD     := go build -ldflags '$(LDFLAGS)'
 
+# Git提交哈希和编译时间，自动注入
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME := $(shell date +"%Y-%m-%d %H:%M:%S")
+
 
 # -------------------------- 编译目标 -------------------------- #
-.PHONY: all windows linux android clean
+.PHONY: all windows linux android clean release
 
 # 默认编译所有平台
 all: windows linux android
@@ -64,3 +68,12 @@ android:
 # 清理编译产物
 clean:
 	rm -rf $(OUTPUT_DIR)
+
+# 自动上传到GitHub Release（需要先安装GitHub CLI工具：https://cli.github.com/）
+release:
+	@echo "正在上传版本 v$(APP_VERSION) 到GitHub Release..."
+	gh release create v$(APP_VERSION) \
+		--title "$(APP_NAME) v$(APP_VERSION)" \
+		--notes "版本 v$(APP_VERSION) 发布，Git提交：$(GIT_COMMIT)，编译时间：$(BUILD_TIME)" \
+		$(OUTPUT_DIR)/*
+	@echo "上传完成！"
