@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	a := app.New()
+	a := app.NewWithID("com.mingshiwu.motionswap")
 	w := a.NewWindow("MotionSwap - 动态照片转换工具")
 
 	ui.NewApp(w)

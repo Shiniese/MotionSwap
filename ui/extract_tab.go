@@ -139,8 +139,10 @@ func (t *ExtractTab) Build() fyne.CanvasObject {
 }
 
 func (t *ExtractTab) log(msg string) {
-	t.logEntry.SetText(t.logEntry.Text + msg + "\n")
-	t.logEntry.CursorRow = len(strings.Split(t.logEntry.Text, "\n")) - 1
+	fyne.Do(func() {
+		t.logEntry.SetText(t.logEntry.Text + msg + "\n")
+		t.logEntry.CursorRow = len(strings.Split(t.logEntry.Text, "\n")) - 1
+	})
 }
 
 func (t *ExtractTab) getSrcListableURI() fyne.ListableURI {
@@ -180,60 +182,70 @@ func (t *ExtractTab) scanDir() {
 	}
 	t.scanning.Store(true)
 	t.scanBtn.Disable()
-	defer func() {
-		t.scanning.Store(false)
-		t.scanBtn.Enable()
-	}()
 
 	srcURI := t.getSrcListableURI()
 	if srcURI == nil {
 		dialog.ShowError(fmt.Errorf("请选择源目录"), t.window)
+		t.scanning.Store(false)
+		t.scanBtn.Enable()
 		return
 	}
 
 	t.files = nil
 	t.fileList.Refresh()
+	t.statsLabel.SetText("扫描中...")
 	t.log("扫描目录: " + srcURI.Path())
 
-	entries, err := storage.List(srcURI)
-	if err != nil {
-		dialog.ShowError(fmt.Errorf("读取目录失败: %w", err), t.window)
-		return
-	}
+	go func() {
+		defer func() {
+			t.scanning.Store(false)
+			fyne.Do(func() { t.scanBtn.Enable() })
+		}()
 
-	factory := extractor.NewProcessorFactory()
-	count := 0
-
-	for _, entry := range entries {
-		name := strings.ToLower(entry.Name())
-		if !strings.HasSuffix(name, ".jpg") && !strings.HasSuffix(name, ".jpeg") {
-			continue
-		}
-
-		data, err := readURI(entry)
+		entries, err := storage.List(srcURI)
 		if err != nil {
-			t.log(fmt.Sprintf("  跳过 %s: %v", entry.Name(), err))
-			continue
+			fyne.Do(func() {
+				dialog.ShowError(fmt.Errorf("读取目录失败: %w", err), t.window)
+			})
+			return
 		}
 
-		xmpInfo, _ := xmp.ExtractXMP(data)
-		p := factory.Detect(xmpInfo, data)
-		if p == nil {
-			continue
+		factory := extractor.NewProcessorFactory()
+		var detected []fileStatus
+
+		for _, entry := range entries {
+			name := strings.ToLower(entry.Name())
+			if !strings.HasSuffix(name, ".jpg") && !strings.HasSuffix(name, ".jpeg") {
+				continue
+			}
+
+			data, err := readURI(entry)
+			if err != nil {
+				t.log(fmt.Sprintf("  跳过 %s: %v", entry.Name(), err))
+				continue
+			}
+
+			xmpInfo, _ := xmp.ExtractXMP(data)
+			p := factory.Detect(xmpInfo, data)
+			if p == nil {
+				continue
+			}
+
+			detected = append(detected, fileStatus{
+				uri:    entry,
+				name:   entry.Name(),
+				brand:  p.Brand().String(),
+				status: "待处理",
+			})
 		}
 
-		t.files = append(t.files, fileStatus{
-			uri:    entry,
-			name:   entry.Name(),
-			brand:  p.Brand().String(),
-			status: "待处理",
+		fyne.Do(func() {
+			t.files = detected
+			t.fileList.Refresh()
+			t.statsLabel.SetText(fmt.Sprintf("发现 %d 个动态照片", len(detected)))
 		})
-		count++
-	}
-
-	t.fileList.Refresh()
-	t.statsLabel.SetText(fmt.Sprintf("发现 %d 个动态照片", count))
-	t.log(fmt.Sprintf("扫描完成: 发现 %d 个动态照片", count))
+		t.log(fmt.Sprintf("扫描完成: 发现 %d 个动态照片", len(detected)))
+	}()
 }
 
 func (t *ExtractTab) startExtract() {
@@ -275,14 +287,16 @@ func (t *ExtractTab) startExtract() {
 
 			f := &t.files[i]
 			f.status = "处理中..."
-			t.fileList.Refresh()
+			fyne.Do(func() {
+				t.fileList.Refresh()
+			})
 
 			data, err := readURI(f.uri)
 			if err != nil {
 				f.status = "失败: 读取错误"
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s: %v", f.name, err))
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 
@@ -291,7 +305,7 @@ func (t *ExtractTab) startExtract() {
 			if p == nil {
 				f.status = "跳过"
 				t.log(fmt.Sprintf("  - %s: 不是动态照片", f.name))
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 
@@ -300,7 +314,7 @@ func (t *ExtractTab) startExtract() {
 				f.status = "失败: 处理错误"
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s: 处理失败", f.name))
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 
@@ -312,14 +326,14 @@ func (t *ExtractTab) startExtract() {
 			if skip {
 				f.status = "跳过"
 				fail++
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 			vidURI, skip := t.checkConflict(dstURI, vidName, &conflictAction)
 			if skip {
 				f.status = "跳过"
 				fail++
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 
@@ -327,21 +341,21 @@ func (t *ExtractTab) startExtract() {
 				f.status = "失败: 写入错误"
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s: %v", f.name, err))
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 			if err := writeURI(vidURI, result.VideoData); err != nil {
 				f.status = "失败: 写入错误"
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s: %v", f.name, err))
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 
 			f.status = "完成"
 			success++
 			t.log(fmt.Sprintf("  ✓ %s → %s, %s", f.name, imgName, vidName))
-			t.progress.SetValue(float64(i+1) / float64(total))
+			fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 		}
 
 		t.log(fmt.Sprintf("提取完成: 成功 %d, 失败 %d, 总计 %d", success, fail, total))
@@ -387,8 +401,10 @@ func (t *ExtractTab) stopExtract() {
 
 func (t *ExtractTab) finishExtract() {
 	t.running.Store(false)
-	t.startBtn.Enable()
-	t.scanBtn.Enable()
-	t.stopBtn.Disable()
-	t.progress.SetValue(0)
+	fyne.Do(func() {
+		t.startBtn.Enable()
+		t.scanBtn.Enable()
+		t.stopBtn.Disable()
+		t.progress.SetValue(0)
+	})
 }

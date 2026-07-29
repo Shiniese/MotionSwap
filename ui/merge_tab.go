@@ -149,8 +149,10 @@ func (t *MergeTab) Build() fyne.CanvasObject {
 }
 
 func (t *MergeTab) log(msg string) {
-	t.logEntry.SetText(t.logEntry.Text + msg + "\n")
-	t.logEntry.CursorRow = len(strings.Split(t.logEntry.Text, "\n")) - 1
+	fyne.Do(func() {
+		t.logEntry.SetText(t.logEntry.Text + msg + "\n")
+		t.logEntry.CursorRow = len(strings.Split(t.logEntry.Text, "\n")) - 1
+	})
 }
 
 func (t *MergeTab) getSrcListableURI() fyne.ListableURI {
@@ -189,59 +191,69 @@ func (t *MergeTab) scanDir() {
 	}
 	t.scanning.Store(true)
 	t.scanBtn.Disable()
-	defer func() {
-		t.scanning.Store(false)
-		t.scanBtn.Enable()
-	}()
 
 	srcURI := t.getSrcListableURI()
 	if srcURI == nil {
 		dialog.ShowError(fmt.Errorf("请选择源目录"), t.window)
+		t.scanning.Store(false)
+		t.scanBtn.Enable()
 		return
 	}
 
 	t.pairs = nil
 	t.fileList.Refresh()
+	t.statsLabel.SetText("扫描中...")
 	t.log("扫描目录: " + srcURI.Path())
 
-	entries, err := storage.List(srcURI)
-	if err != nil {
-		dialog.ShowError(fmt.Errorf("读取目录失败: %w", err), t.window)
-		return
-	}
+	go func() {
+		defer func() {
+			t.scanning.Store(false)
+			fyne.Do(func() { t.scanBtn.Enable() })
+		}()
 
-	jpgMap := make(map[string]fyne.URI)
-	for _, entry := range entries {
-		name := strings.ToLower(entry.Name())
-		if strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") {
-			base := strings.TrimSuffix(name, filepath.Ext(name))
-			jpgMap[base] = entry
-		}
-	}
-
-	count := 0
-	for _, entry := range entries {
-		name := strings.ToLower(entry.Name())
-		if !strings.HasSuffix(name, ".mp4") && !strings.HasSuffix(name, ".mov") {
-			continue
-		}
-		base := strings.TrimSuffix(name, filepath.Ext(name))
-		if imgURI, ok := jpgMap[base]; ok {
-			t.pairs = append(t.pairs, mergePair{
-				imgURI:  imgURI,
-				vidURI:  entry,
-				imgName: imgURI.Name(),
-				vidName: entry.Name(),
-				brand:   t.brandSel.Selected,
-				status:  "待处理",
+		entries, err := storage.List(srcURI)
+		if err != nil {
+			fyne.Do(func() {
+				dialog.ShowError(fmt.Errorf("读取目录失败: %w", err), t.window)
 			})
-			count++
+			return
 		}
-	}
 
-	t.fileList.Refresh()
-	t.statsLabel.SetText(fmt.Sprintf("发现 %d 个配对", count))
-	t.log(fmt.Sprintf("扫描完成: 发现 %d 个 JPG+MP4 配对", count))
+		jpgMap := make(map[string]fyne.URI)
+		for _, entry := range entries {
+			name := strings.ToLower(entry.Name())
+			if strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") {
+				base := strings.TrimSuffix(name, filepath.Ext(name))
+				jpgMap[base] = entry
+			}
+		}
+
+		var found []mergePair
+		for _, entry := range entries {
+			name := strings.ToLower(entry.Name())
+			if !strings.HasSuffix(name, ".mp4") && !strings.HasSuffix(name, ".mov") {
+				continue
+			}
+			base := strings.TrimSuffix(name, filepath.Ext(name))
+			if imgURI, ok := jpgMap[base]; ok {
+				found = append(found, mergePair{
+					imgURI:  imgURI,
+					vidURI:  entry,
+					imgName: imgURI.Name(),
+					vidName: entry.Name(),
+					brand:   t.brandSel.Selected,
+					status:  "待处理",
+				})
+			}
+		}
+
+		fyne.Do(func() {
+			t.pairs = found
+			t.fileList.Refresh()
+			t.statsLabel.SetText(fmt.Sprintf("发现 %d 个配对", len(found)))
+		})
+		t.log(fmt.Sprintf("扫描完成: 发现 %d 个 JPG+MP4 配对", len(found)))
+	}()
 }
 
 func (t *MergeTab) startMerge() {
@@ -285,14 +297,16 @@ func (t *MergeTab) startMerge() {
 
 			p := &t.pairs[i]
 			p.status = "处理中..."
-			t.fileList.Refresh()
+			fyne.Do(func() {
+				t.fileList.Refresh()
+			})
 
 			jpegData, err := readURI(p.imgURI)
 			if err != nil {
 				p.status = "失败: " + err.Error()
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s + %s: %v", p.imgName, p.vidName, err))
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 			mp4Data, err := readURI(p.vidURI)
@@ -300,7 +314,7 @@ func (t *MergeTab) startMerge() {
 				p.status = "失败: " + err.Error()
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s + %s: %v", p.imgName, p.vidName, err))
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 
@@ -309,7 +323,7 @@ func (t *MergeTab) startMerge() {
 				p.status = "失败: " + err.Error()
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s + %s: %v", p.imgName, p.vidName, err))
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 
@@ -317,7 +331,7 @@ func (t *MergeTab) startMerge() {
 			if skip {
 				p.status = "跳过"
 				fail++
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 
@@ -325,14 +339,14 @@ func (t *MergeTab) startMerge() {
 				p.status = "失败: 写入错误"
 				fail++
 				t.log(fmt.Sprintf("  ✗ %s: %v", p.imgName, err))
-				t.progress.SetValue(float64(i+1) / float64(total))
+				fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 				continue
 			}
 
 			p.status = "完成"
 			success++
 			t.log(fmt.Sprintf("  ✓ %s + %s → %s", p.imgName, p.vidName, p.imgName))
-			t.progress.SetValue(float64(i+1) / float64(total))
+			fyne.Do(func() { t.progress.SetValue(float64(i+1) / float64(total)) })
 		}
 
 		t.log(fmt.Sprintf("合并完成: 成功 %d, 失败 %d, 总计 %d", success, fail, total))
@@ -378,10 +392,12 @@ func (t *MergeTab) stopMerge() {
 
 func (t *MergeTab) finishMerge() {
 	t.running.Store(false)
-	t.startBtn.Enable()
-	t.scanBtn.Enable()
-	t.stopBtn.Disable()
-	t.progress.SetValue(0)
+	fyne.Do(func() {
+		t.startBtn.Enable()
+		t.scanBtn.Enable()
+		t.stopBtn.Disable()
+		t.progress.SetValue(0)
+	})
 }
 
 func resolveBrand(s string) merger.MotionPhotoBrand {

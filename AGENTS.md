@@ -7,7 +7,7 @@
 
 ## 项目状态
 
-36 个测试全部通过（4 个包），核心逻辑完成，UI 代码已编写完毕。
+36 个测试全部通过（4 个包），核心逻辑完成，UI 扫描与提取/合并均已在后台 goroutine 中异步执行。
 
 ---
 
@@ -137,4 +137,4 @@ go vet ./pkg/... ./core/... ./ui/
 - [ ] **Fyne 首次构建**：CGo 编译 GL/GLFW 耗时较长，需安装 libgl1-mesa-dev、xorg-dev 等依赖
 - [ ] **冲突对话框**：当前使用简单的 `dialog.ShowInformation` + 默认重命名策略，非交互式选择
 - [ ] **格式扩展**：暂未支持 HEIC 格式（iOS Live Photos 常用），后续可根据需要添加
-- [ ] **异步 UI 同步**：goroutine 中直接操作 UI 控件，在多平台下可能需要 `fyne.Do()` 封装
+
