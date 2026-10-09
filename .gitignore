@@ -1,5 +1,92 @@
-dist/
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
 
-# helper files
-.codegraph/
-docs/
+# Gradle / Android Studio build output
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+bin/
+gen/
+out/
+release/
+captures/
+output.json
+output-metadata.json
+*.hprof
+.cxx/
+
+# Signing material. Nothing in this repo needs a keystore checked in: the release build is
+# unsigned and CI reads credentials from the environment (see README, "Signing").
+# If you ever add a local debug keystore, it must never reach a commit.
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.der
+*.cer
+*.crt
+*.mobileprovision
+google-services.json
+
+# Local SDK/IDE paths and machine state
+local.properties
+.idea
+.kotlin
+*.hprof.hs_err_pid*
+
+# Tool-generated indexes. `.codegraph/` is a 9 MB SQLite graph rebuilt from the source tree;
+# it is a local cache, not source, and would be several MB of churn on every commit.
+.codegraph
+
+# Editor / OS cruft
+.vscode/
+*.swp
+*~
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.trash/
+.Trash-*/
+$RECYCLE.BIN/
+.Trash-*/
+# Windows recycle bin and macOS trash: local samples have been recovered from these before,
+# and this project deliberately never pulls media back out of them.
+*_RECYCLE.BIN/
+
+# NOTE: `samples/` is intentionally NOT ignored.
+# The JPEG and MP4 fixtures under `samples/` are committed on purpose: they are what let the
+# test suite verify per-vendor motion-photo detection offline, and stripping them would turn
+# 332 passing assertions into a pile of skips.
+#
+# Before committing any sample, note that real camera files carry EXIF. Coordinates were removed
+# from the committed fixtures, but **check any newly added file**: strip GPS (IFD tag 0x8825),
+# the `©xyz` MP4 atom, and Artist/Copyright/ImageDescription before adding it. See
+# `tools/strip-sample-metadata.py`, which does this without moving a single byte — rewriting a
+# TIFF structure would invalidate the absolute offsets inside vendor MakerNotes, and the vendor
+# detection tests would stop passing for reasons that look like a code bug.
+#
+# `samples/.DS_Store` is ignored below for the same reason it is ignored everywhere: it is
+# Finder's idea of what belongs in a directory.
+samples/.DS_Store
+
+# Scratch space for the verification harness (samples' derived output, ffprobe dumps, etc.)
+/tmp/
+/scratch/
+*.log
